@@ -1,0 +1,341 @@
+﻿#include "database.h"
+
+// Author: Danny Cowles
+
+database::database(const QString& path)
+{
+    //Gives the database object a name and adds a path to the .db file which will be "college.db"
+    db = QSqlDatabase::addDatabase("QSQLITE");
+    db.setDatabaseName(path);
+
+    //Ensure that the database connection was successfully opened
+    if (!db.open())
+    {
+        qDebug() << "Connection with database unsuccessful";
+    }
+    else
+    {
+        qDebug() << "Connection with database successful";
+    }
+
+}
+
+database::~database()
+{
+    //closes the database connection when database object is deleted
+    db.close();
+
+    qDebug() << "Database connection closed";
+}
+
+bool database::addCollege(const college& newCollege)
+{
+    //retrieve information from college object so it can be sent into the database
+    QString name = newCollege.name();
+    QString state = newCollege.state();
+    int undergrads = newCollege.undergrads();
+    std::unordered_map<int, float> distances = newCollege.distances();
+    std::vector<souvenir> souvenirs = newCollege.souvenirs();
+
+    //this will hold the formatted distance information for the college in the form #,#,#,#
+    QString distanceText = "";
+
+    // *** MAKE PRIVATE FUNCTION FOR REUSABILITY ***
+    unsigned i = 0;
+    for (auto x: distances)
+    {
+        //converts float distance to a QString and adds it to the distance text for the database
+        distanceText += QString::number(x.first) + " " + QString::number(x.second);
+
+        //adds a comma unless you reach the last distance in the map
+        if (i != distances.size() - 1)
+        {
+            distanceText += ", ";
+        }
+
+        i++;
+
+    }
+    ///
+
+    QString souvenirsText = "";
+    // *** ALSO MAKE THIS FUNCTION PRIVATE
+
+    for (unsigned i = 0; i < souvenirs.size(); i++)
+    {
+        //adds souvenir name (first = name, second = price)
+        souvenirsText += souvenirs[i].item.first + " ";
+
+        //adds dollar sign and souvenir price to the string
+        souvenirsText += "$" + QString::number(souvenirs[i].item.second);
+
+        //adds a comma unless you reach the last souvenir in the vector
+        if (i != souvenirs.size() - 1)
+        {
+            souvenirsText += ", ";
+        }
+    }
+    qDebug() << "SOUVENIRS: " << souvenirsText;
+
+    //
+
+    qDebug() << "DISTANCE TEXT FOR DATABASE: " << distanceText;
+
+    //create an insert query with the parameters to load the table
+    QSqlQuery query;
+    query.prepare("INSERT INTO COLLEGES VALUES (:NAME, :STATE, :UNDERGRADS, :DISTANCES, :SOUVENIRS)");
+
+    //bind college information to their respective columns
+    query.bindValue(":NAME", name);
+    query.bindValue(":STATE", state);
+    query.bindValue(":UNDERGRADS", undergrads);
+    query.bindValue(":DISTANCES", distanceText);
+    query.bindValue(":SOUVENIRS", souvenirsText);
+
+    //ensure that the college was successfully added to the database
+    if (query.exec())
+    {
+        qDebug() << "College successfully added to database";
+
+        return true;
+    }
+    else
+    {
+        qDebug() << "Error: Could not add college to database";
+
+        //debugging tools for determining the possible errors for why the college wasn't added to the database
+        qDebug() << query.lastError().text();
+        qDebug() << query.lastQuery();
+
+        return false;
+    }
+
+}
+
+void database::deleteAllColleges()
+{
+    //deletes all rows from the colleges table in the database
+    QSqlQuery query("DELETE FROM COLLEGES");
+
+    //ensure that all colleges were deleted from the database
+    if (query.exec())
+    {
+        qDebug() << "Database: All colleges successfully deleted!";
+    }
+    else
+    {
+        qDebug() << "Error: Could not remove all colleges from the database";
+    }
+}
+
+int database::getCollegeCount() const
+{
+    QSqlQuery query("SELECT * FROM COLLEGES");
+
+    int numRows = 0;
+
+    //calculates how many colleges are in the database
+    if (query.last())
+    {
+        numRows = query.at() + 1;
+    }
+
+    return numRows;
+}
+
+college database::getCollegeByName(const QString name) const
+{
+    //create college object
+    college newCollege;
+
+    //create a query that adds a bind value to the desired name
+    QSqlQuery query;
+    query.prepare("SELECT * FROM COLLEGES WHERE NAME = ?");
+    query.addBindValue(name);
+    query.exec();
+    query.next();
+
+    //retrieve a record
+    auto rec = query.record();
+
+    //add error checking here for if name does not exist
+    newCollege = getCollegeFromRecord(rec);
+
+    return newCollege;
+}
+
+college database::getCollegeFromRecord(const QSqlRecord &record) const
+{
+    //create college object
+    college newCollege;
+
+    //retrieve name and set college object's name
+    QString name = record.value("NAME").toString();
+    newCollege.setName(name);
+
+    //retrieve state and set college object's state
+    QString state = record.value("STATE").toString();
+    newCollege.setState(state);
+
+    //retrive undergrads and set college object's undergrads
+    int undergrads = record.value("UNDERGRADS").toInt();
+    newCollege.setUndergrads(undergrads);
+
+    //retrieve distances from the database
+    auto distanceText = record.value("DISTANCES").toString().split(", ");
+
+    //retrieves souvenirs from the database
+    auto souvenirsText = record.value("SOUVENIRS").toString();
+
+    //splits the distanceText string by commas
+    for (unsigned i = 0, n = distanceText.size(); i < n; ++i)
+    {
+        QString pair = distanceText[i];
+        int space = pair.indexOf(' ');
+
+        //retrieves ID before space character
+        int ID = pair.mid(0, space).toInt();
+
+        //retrieves distance after space character
+        float distance = pair.mid(space + 1).toFloat();
+
+        //for debugging and testing making sure the distances are correct
+        qDebug() << "getCollegeFromRecord() id and distance:";
+        qDebug() << ID;
+        qDebug() << distance;
+
+        //sets the distances in the distance map (ID, distance)
+        newCollege.setDistance(ID, distance);
+    }
+
+    auto items = souvenirsText.split(", ");
+
+    for (const QString& x: items)
+    {
+        int index = x.indexOf('$');
+
+        //gets souvenirs name which is the text before the dollar sign, removes the space
+        QString souvenirName = x.mid(0, index - 1);
+
+        //gets souvenirs price which is the text after the dollar sign, and converts that text to float
+        float souvenirPrice = x.mid(index + 1).toFloat();
+
+        newCollege.addSouvenir(souvenirName, souvenirPrice);
+    }
+
+    qDebug() << "Printing college data in getCollegeFromRecord()";
+    newCollege.print();
+
+    return newCollege;
+}
+
+std::unordered_map<QString, college> database::getColleges() const
+{
+    //holds the college object that is currently being taken from the database
+    college currentCollege;
+
+    //map to hold (college name, college object)
+    std::unordered_map<QString, college> collegeMap;
+
+    //select all columns of all rows of the COLLEGES table
+    QSqlQuery query("SELECT * FROM COLLEGES");
+
+    //converts each record in the database into a college object and add it to the college map
+    while (query.next()){
+        currentCollege = getCollegeFromRecord(query.record());
+
+        collegeMap.insert(std::make_pair(currentCollege.name(), currentCollege));
+    }
+
+    //returns the college map
+    return collegeMap;
+
+}
+
+bool database::updateCollege(const college& college)
+{
+    //retrieves information from the college object
+    QString name = college.name();
+    QString state = college.state();
+    int undergrads = college.undergrads();
+
+    //retrieves the distances and stores in a distance map
+    std::unordered_map<int, float> distances = college.distances();
+
+    //retreives the souvenirs and stores in vector of souvenir
+    std::vector<souvenir> souvenirs = college.souvenirs();
+
+    //this will hold the formatted distance information for the college in the form #,#,#,#
+    QString distanceText = "";
+
+    // *** MAKE THIS A PRIVATE FUNCTION FOR REUSABILITY ***
+
+    unsigned i = 0;
+    for (auto x: distances)
+    {
+        //converts float distance to a QString and adds it to the distance text for the database
+        distanceText += QString::number(x.first) + " " + QString::number(x.second);
+
+        //adds a comma unless you reach the last distance in the map
+        if (i != distances.size() - 1)
+        {
+            distanceText += ", ";
+        }
+
+        i++;
+
+    }
+
+    ///
+
+    qDebug() << "printing in updateCollege(): ";
+    qDebug() << name;
+    qDebug() << state;
+    qDebug() << undergrads;
+    qDebug() << distanceText;
+
+    // ***
+
+    //creates a query to update colleges in the row where name is the name of the college object being updated
+    QSqlQuery query;
+    query.prepare("UPDATE COLLEGES SET NAME = :NAME, STATE = :STATE, UNDERGRADS = :UNDERGRADS, DISTANCES = :DISTANCES WHERE NAME = :NAME");
+
+    query.bindValue(":NAME", name);
+    query.bindValue(":STATE", state);
+    query.bindValue(":UNDERGRADS", undergrads);
+    query.bindValue(":DISTANCES", distanceText);
+
+    //ensure that the college was successfully updated to the database
+    if (query.exec())
+    {
+        qDebug() << "College successfully updated to database";
+
+        return true;
+    }
+    else
+    {
+        qDebug() << "Error: Could not update college";
+
+        //debugging tools for determining the possible errors for why the college wasn't added to the database
+        qDebug() << query.lastError().text();
+        qDebug() << query.lastQuery();
+
+        return false;
+    }
+}
+
+void database::resetWithFile()
+{
+    //first clear the database
+    deleteAllColleges();
+
+    //here we will parse the input file and then add each college from the file to the database
+
+}
+
+
+
+
+
+
+
